@@ -15,6 +15,8 @@ import pg from "pg";
 import { rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 import { getAdapter, adapters } from "./adapters/index.mjs";
 
 const args = Object.fromEntries(
@@ -23,10 +25,12 @@ const args = Object.fromEntries(
   )
 );
 
-if (args.help || (!args.adapter && !args.list)) {
+if (args.help || (!args.adapter && !args["adapter-file"] && !args.list)) {
   console.log(`pooled allocation conformance
 
-  --adapter <name>   implementation to test
+  --adapter <name>       built-in implementation to test
+  --adapter-file <path>  load an adapter from anywhere on disk. Use this for
+                         implementations you do not want in this repo
   --callers <n>      simultaneous callers        (default 16)
   --pool <n>         interchangeable resources   (default 8)
   --rounds <n>       repetitions                 (default 20)
@@ -47,7 +51,9 @@ if (args.list) {
 const CALLERS = Number(args.callers ?? 16);
 const POOL    = Number(args.pool ?? 8);
 const ROUNDS  = Number(args.rounds ?? 20);
-const adapter = getAdapter(String(args.adapter));
+const adapter = args["adapter-file"]
+  ? (await import(pathToFileURL(resolve(String(args["adapter-file"]))).href)).default
+  : getAdapter(String(args.adapter));
 
 const dir = mkdtempSync(join(tmpdir(), "conformance-"));
 const PORT = 55000 + Math.floor(Math.random() * 9000);

@@ -1,1 +1,9 @@
 node_modules/
+
+# Guard: only the published adapters may ever be tracked here.
+# Anything else dropped into this directory is ignored by default, so a stray
+# `git add .` cannot capture a private implementation. See .githooks/pre-commit.
+src/adapters/*
+!src/adapters/index.mjs
+!src/adapters/read-then-write.mjs
+!src/adapters/http.mjs

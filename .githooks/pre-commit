@@ -1,0 +1,44 @@
+#!/bin/sh
+# Refuse to commit anything from the private implementation.
+#
+# This repository is published. The .gitignore blocks the private adapter by
+# filename; this blocks by content, so renaming a file or pasting it into
+# another one does not get around the guard.
+#
+# It matches one marker string and two filenames. It deliberately knows nothing
+# about how the private implementation works. An earlier version of this hook
+# searched for the techniques by name, which meant the guard published the thing
+# it was guarding to everyone who opened it. A guard that has to describe the
+# secret is not a guard.
+#
+# The marker lives in the private repository, at the top of every file that must
+# never appear here.
+#
+# Install once:  git config core.hooksPath .githooks
+
+MARKER='ALLOTLY-PRIVATE-DO-NOT-PUBLISH'
+STAGED=$(git diff --cached --name-only -- . ':(exclude).githooks/*')
+
+if git diff --cached -U0 -- . ':(exclude).githooks/*' | grep -qF "$MARKER"; then
+  BAD=marker
+elif printf '%s\n' "$STAGED" | grep -qE '(^|/)(allocate|harness-adapter)\.mjs$'; then
+  BAD=filename
+fi
+
+if [ -n "$BAD" ]; then
+  cat >&2 <<'MSG'
+
+  BLOCKED: staged changes contain private code.
+
+  This repository is published. Nothing from the private repository belongs in
+  it, and it does not need to be here: the harness loads an adapter from any
+  path, so point it at the private one where it already lives.
+
+      node src/harness.mjs --adapter-file /path/to/private/adapter.mjs \
+        --rounds 10 --deadlock-timeout 50 --assert
+
+  If you are certain this is a false positive, review the staged diff first.
+
+MSG
+  exit 1
+fi
