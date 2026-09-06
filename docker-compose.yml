@@ -1,8 +1,19 @@
 # One command, no local Node and no local Postgres.
 #   docker compose run --rm conformance --adapter read-then-write
+#
+# npm ci, not npm install: package-lock.json is committed, so every run resolves
+# the same versions and npm checks each tarball against the integrity hash in the
+# lockfile. That pinning is the supply chain control here.
+#
+# Install scripts are deliberately NOT disabled. embedded-postgres ships a
+# postinstall that creates the version-alias symlinks its bundled Postgres binary
+# links against, and without it the binary aborts on startup:
+#   dyld: Library not loaded: @loader_path/../lib/libicudata.77.dylib
+# Tested, not assumed. If you want them off, you also need
+# `npm rebuild` for the @embedded-postgres platform package.
 services:
   conformance:
     image: node:20-bookworm
     working_dir: /app
     volumes: [".:/app"]
-    entrypoint: ["sh", "-c", "npm install --silent && node src/harness.mjs \"$@\"", "--"]
+    entrypoint: ["sh", "-c", "npm ci --silent && node src/harness.mjs \"$@\"", "--"]

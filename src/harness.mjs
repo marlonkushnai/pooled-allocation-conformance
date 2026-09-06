@@ -83,6 +83,7 @@ try {
   const totals = { booked: 0, refused: 0, error: 0 };
   const errorCodes = {};
   let doubleAllocated = 0;
+  let unverifiable = null;   // set when verify could not read what it was given
   const started = Date.now();
 
   for (let round = 0; round < ROUNDS; round++) {
@@ -117,11 +118,22 @@ try {
       totals[r.outcome] = (totals[r.outcome] ?? 0) + 1;
       if (r.outcome === "error") errorCodes[r.code] = (errorCodes[r.code] ?? 0) + 1;
     }
-    doubleAllocated += (await adapter.verify(admin, { slot })).doubleAllocated;
+    // A verify that cannot read its input has not measured anything. Let it say
+    // so rather than letting an exception look like a crash or a zero look like
+    // a pass.
+    try {
+      doubleAllocated += (await adapter.verify(admin, { slot })).doubleAllocated;
+    } catch (e) {
+      unverifiable = e.message;
+    }
     await admin.end();
+    if (unverifiable) break;
   }
 
   const attempts = CALLERS * ROUNDS;
+  const verdict = unverifiable || totals.booked === 0
+    ? "INCONCLUSIVE"
+    : doubleAllocated === 0 ? "pass" : "FAIL";
   const ms = Date.now() - started;
   console.log(`
 adapter          ${adapter.name}
@@ -132,22 +144,29 @@ shape            ${CALLERS} callers, pool of ${POOL}, ${ROUNDS} rounds, ${attemp
   refused        ${totals.refused}
   error          ${totals.error}${Object.keys(errorCodes).length ? "   " + JSON.stringify(errorCodes) : ""}
 
-  DOUBLE ALLOCATED   ${doubleAllocated}${
-    totals.booked === 0 ? "   INCONCLUSIVE" : doubleAllocated === 0 ? "   pass" : "   FAIL"}
+  DOUBLE ALLOCATED   ${unverifiable ? "?" : doubleAllocated}   ${verdict}
 `);
+
+  if (unverifiable) {
+    console.log(`INCONCLUSIVE: the verify step could not read the data it was given, so no
+count was produced. This is not a pass.
+
+  ${unverifiable}\n`);
+    if (args.assert || args["expect-failure"]) failed = true;
+  }
 
   // A run in which nothing was booked cannot prove anything. Zero double
   // allocations out of zero successful bookings is not a pass, it is a test that
   // did not run. Saying otherwise is the worst thing a conformance tool can do.
-  if (totals.booked === 0) {
+  if (!unverifiable && totals.booked === 0) {
     console.log(`INCONCLUSIVE: nothing was booked, so nothing could be double allocated.
 Check the adapter configuration and the error codes above before reading anything
 into the result.\n`);
     if (args.assert || args["expect-failure"]) failed = true;
   }
 
-  if (args.assert && doubleAllocated !== 0) failed = true;
-  if (args["expect-failure"] && doubleAllocated === 0) {
+  if (args.assert && !unverifiable && doubleAllocated !== 0) failed = true;
+  if (args["expect-failure"] && !unverifiable && doubleAllocated === 0) {
     console.log("expected this adapter to double-allocate and it did not");
     failed = true;
   }
