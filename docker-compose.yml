@@ -1,0 +1,8 @@
+# One command, no local Node and no local Postgres.
+#   docker compose run --rm conformance --adapter read-then-write
+services:
+  conformance:
+    image: node:20-bookworm
+    working_dir: /app
+    volumes: [".:/app"]
+    entrypoint: ["sh", "-c", "npm install --silent && node src/harness.mjs \"$@\"", "--"]
