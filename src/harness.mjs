@@ -93,9 +93,23 @@ try {
     await adapter.setup(admin);
 
     const poolId = `p${round}`;
-    const slot = args.slot
-      ? { from: `${args.slot}T10:00:00Z`, to: `${args.slot}T11:00:00Z` }
-      : { from: "2026-10-01T10:00:00Z", to: "2026-10-01T11:00:00Z" };
+
+    // Each round asks for a DIFFERENT hour, and the caller ids carry the round.
+    //
+    // A SQL adapter gets a fresh schema every round, so it never noticed. An
+    // adapter pointed at a live API does not: with a fixed slot and fixed caller
+    // ids, round 2 replays round 1's idempotency keys and a correct API returns
+    // the original booking, 200. The harness counted that as "booked". Measured
+    // against a real service: 3 rounds, 16 callers, 24 booked reported, 8
+    // reservations actually created. The other 16 were replays.
+    //
+    // Overstating bookings is the same class of error as understating double
+    // allocations. Move the slot and the caller ids and every round is a genuine
+    // fresh contention test whatever the adapter talks to.
+    const base = new Date(`${args.slot ?? "2026-10-01"}T10:00:00Z`);
+    base.setUTCDate(base.getUTCDate() + round);
+    const day = base.toISOString().slice(0, 10);
+    const slot = { from: `${day}T10:00:00Z`, to: `${day}T11:00:00Z` };
     const resourceIds = await adapter.seed(admin, { poolId, poolSize: POOL, slot });
 
     const clients = Array.from({ length: CALLERS }, () => new pg.Client(CONN));
@@ -109,7 +123,7 @@ try {
             [String(args["deadlock-timeout"])]);
         }
         await gate();
-        return adapter.attempt(c, { poolId, resourceIds, slot, callerId: `${RUN_ID}-c${i}` });
+        return adapter.attempt(c, { poolId, resourceIds, slot, callerId: `${RUN_ID}-r${round}-c${i}` });
       })
     );
     await Promise.all(clients.map(c => c.end().catch(() => {})));
