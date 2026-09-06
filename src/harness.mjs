@@ -34,6 +34,7 @@ if (args.help || (!args.adapter && !args["adapter-file"] && !args.list)) {
   --callers <n>      simultaneous callers        (default 16)
   --pool <n>         interchangeable resources   (default 8)
   --rounds <n>       repetitions                 (default 20)
+  --slot <YYYY-MM-DD>  race a specific date, to avoid a dirty window
   --assert           exit 1 unless double allocated is 0
   --expect-failure   exit 1 unless double allocated is > 0
   --deadlock-timeout <ms>  override Postgres deadlock_timeout for callers
@@ -51,6 +52,11 @@ if (args.list) {
 const CALLERS = Number(args.callers ?? 16);
 const POOL    = Number(args.pool ?? 8);
 const ROUNDS  = Number(args.rounds ?? 20);
+// A run id, so idempotency keys are unique per invocation. Without it a second
+// run reuses the first run's keys with a different body, which any correct API
+// answers with 422 -- as it should.
+export const RUN_ID = Math.random().toString(36).slice(2, 10);
+
 const adapter = args["adapter-file"]
   ? (await import(pathToFileURL(resolve(String(args["adapter-file"]))).href)).default
   : getAdapter(String(args.adapter));
@@ -86,7 +92,9 @@ try {
     await adapter.setup(admin);
 
     const poolId = `p${round}`;
-    const slot = { from: "2026-10-01T10:00:00Z", to: "2026-10-01T11:00:00Z" };
+    const slot = args.slot
+      ? { from: `${args.slot}T10:00:00Z`, to: `${args.slot}T11:00:00Z` }
+      : { from: "2026-10-01T10:00:00Z", to: "2026-10-01T11:00:00Z" };
     const resourceIds = await adapter.seed(admin, { poolId, poolSize: POOL, slot });
 
     const clients = Array.from({ length: CALLERS }, () => new pg.Client(CONN));
@@ -100,7 +108,7 @@ try {
             [String(args["deadlock-timeout"])]);
         }
         await gate();
-        return adapter.attempt(c, { poolId, resourceIds, slot, callerId: `c${i}` });
+        return adapter.attempt(c, { poolId, resourceIds, slot, callerId: `${RUN_ID}-c${i}` });
       })
     );
     await Promise.all(clients.map(c => c.end().catch(() => {})));
@@ -124,8 +132,19 @@ shape            ${CALLERS} callers, pool of ${POOL}, ${ROUNDS} rounds, ${attemp
   refused        ${totals.refused}
   error          ${totals.error}${Object.keys(errorCodes).length ? "   " + JSON.stringify(errorCodes) : ""}
 
-  DOUBLE ALLOCATED   ${doubleAllocated}${doubleAllocated === 0 ? "   pass" : "   FAIL"}
+  DOUBLE ALLOCATED   ${doubleAllocated}${
+    totals.booked === 0 ? "   INCONCLUSIVE" : doubleAllocated === 0 ? "   pass" : "   FAIL"}
 `);
+
+  // A run in which nothing was booked cannot prove anything. Zero double
+  // allocations out of zero successful bookings is not a pass, it is a test that
+  // did not run. Saying otherwise is the worst thing a conformance tool can do.
+  if (totals.booked === 0) {
+    console.log(`INCONCLUSIVE: nothing was booked, so nothing could be double allocated.
+Check the adapter configuration and the error codes above before reading anything
+into the result.\n`);
+    if (args.assert || args["expect-failure"]) failed = true;
+  }
 
   if (args.assert && doubleAllocated !== 0) failed = true;
   if (args["expect-failure"] && doubleAllocated === 0) {

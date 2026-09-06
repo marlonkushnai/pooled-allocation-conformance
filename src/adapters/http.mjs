@@ -6,6 +6,13 @@
 //
 //   BOOKING_URL      required. POST here to request one resource from the pool
 //   BOOKING_AUTH     optional. Sent verbatim as the Authorization header
+//   BOOKING_HEADERS  optional. JSON object of extra headers. {{caller}} is
+//                    substituted, so an idempotency header can be per-caller:
+//                    {"Idempotency-Key":"{{caller}}"}
+//                    {{caller}} is unique per run, so keys never collide across
+//                    invocations. A correct API answers a reused key carrying a
+//                    different body with 422, which would otherwise look like a
+//                    harness failure.
 //   BOOKING_POOL     required. The pool identifier your API expects
 //   BOOKING_BODY     optional. JSON template. {{pool}} {{from}} {{to}} {{caller}}
 //                    are substituted. Default below suits a simple JSON API
@@ -50,6 +57,9 @@ export default {
         headers: {
           "content-type": "application/json",
           ...(process.env.BOOKING_AUTH ? { authorization: process.env.BOOKING_AUTH } : {}),
+          ...JSON.parse(
+            (process.env.BOOKING_HEADERS ?? "{}").replaceAll("{{caller}}", callerId)
+          ),
         },
         body,
       });
